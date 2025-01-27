@@ -1,9 +1,9 @@
 
 project bootable/recovery/
-diff --git a/install/verifier.cpp b/install/verifier.cpp
+diff --git a/otautil/verifier.cpp b/otautil/verifier.cpp
 index 6ba1d77c..8aaacf91 100644
---- a/install/verifier.cpp
-+++ b/install/verifier.cpp
+--- a/otautil/verifier.cpp
++++ b/otautil/verifier.cpp
 @@ -196,6 +196,7 @@ int verify_file(VerifierInterface* package, const std::vector<Certificate>& keys
  
    bool need_sha1 = false;
