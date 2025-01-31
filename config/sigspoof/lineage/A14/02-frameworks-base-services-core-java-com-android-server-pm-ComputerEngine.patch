@@ -40,6 +40,7 @@ index b76683e29e42..09b46606a9db 100644
 +                        } catch (CertificateException e) {
 +                            Slog.e(TAG, "Caught an exception when creating signing keys: ", e);
 +                        }
++                }
 +            }
 +        } catch (Throwable t) {
 +            // We should never die because of any failures, this is system code!
