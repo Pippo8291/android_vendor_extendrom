@@ -26,8 +26,7 @@ index 58448bfefdaf..cc3db2db7759 100644
 +            if (p.getMetaData() != null &&
 +                    p.getTargetSdkVersion() > Build.VERSION_CODES.LOLLIPOP_MR1) {
 +                String sig = p.getMetaData().getString("fake-signature");
-+                if (sig != null &&
-+                    permissions.contains("android.permission.FAKE_PACKAGE_SIGNATURE")) {
++                if (sig != null) {
 +                        pi.signatures = new Signature[] {new Signature(sig)};
 +                        try {
 +                            pi.signingInfo = new SigningInfo(
@@ -41,7 +40,6 @@ index 58448bfefdaf..cc3db2db7759 100644
 +                        } catch (CertificateException e) {
 +                            Slog.e(TAG, "Caught an exception when creating signing keys: ", e);
 +                        }
-+                }
 +            }
 +        } catch (Throwable t) {
 +            // We should never die because of any failures, this is system code!
