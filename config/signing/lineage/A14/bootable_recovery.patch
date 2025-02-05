@@ -1,1 +1,179 @@
-../A12/bootable_recovery.patch
+project bootable/recovery/
+diff --git a/otautil/verifier.cpp b/otautil/verifier.cpp
+index 6ba1d77c..8aaacf91 100644
+--- a/otautil/verifier.cpp
++++ b/otautil/verifier.cpp
+@@ -196,6 +196,7 @@ int verify_file(VerifierInterface* package, const std::vector<Certificate>& keys
+ 
+   bool need_sha1 = false;
+   bool need_sha256 = false;
++  bool need_sha512 = false;
+   for (const auto& key : keys) {
+     switch (key.hash_len) {
+       case SHA_DIGEST_LENGTH:
+@@ -204,13 +205,19 @@ int verify_file(VerifierInterface* package, const std::vector<Certificate>& keys
+       case SHA256_DIGEST_LENGTH:
+         need_sha256 = true;
+         break;
++      case SHA512_DIGEST_LENGTH:
++       need_sha512 = true;
++        break;
+     }
+   }
+ 
+   SHA_CTX sha1_ctx;
+   SHA256_CTX sha256_ctx;
++  SHA512_CTX sha512_ctx;
++
+   SHA1_Init(&sha1_ctx);
+   SHA256_Init(&sha256_ctx);
++  SHA512_Init(&sha512_ctx);
+ 
+   std::vector<HasherUpdateCallback> hashers;
+   if (need_sha1) {
+@@ -221,6 +228,10 @@ int verify_file(VerifierInterface* package, const std::vector<Certificate>& keys
+     hashers.emplace_back(
+         std::bind(&SHA256_Update, &sha256_ctx, std::placeholders::_1, std::placeholders::_2));
+   }
++  if (need_sha512) {
++    hashers.emplace_back(
++        std::bind(&SHA512_Update, &sha512_ctx, std::placeholders::_1, std::placeholders::_2));
++  }
+ 
+   double frac = -1.0;
+   uint64_t so_far = 0;
+@@ -242,6 +253,8 @@ int verify_file(VerifierInterface* package, const std::vector<Certificate>& keys
+   SHA1_Final(sha1, &sha1_ctx);
+   uint8_t sha256[SHA256_DIGEST_LENGTH];
+   SHA256_Final(sha256, &sha256_ctx);
++  uint8_t sha512[SHA512_DIGEST_LENGTH];
++  SHA512_Final(sha512, &sha512_ctx);
+ 
+   const uint8_t* signature = eocd + eocd_size - signature_start;
+   size_t signature_size = signature_start - FOOTER_SIZE;
+@@ -270,6 +283,10 @@ int verify_file(VerifierInterface* package, const std::vector<Certificate>& keys
+         hash = sha256;
+         hash_nid = NID_sha256;
+         break;
++      case SHA512_DIGEST_LENGTH:
++        hash = sha512;
++        hash_nid = NID_sha512;
++        break;
+       default:
+         continue;
+     }
+@@ -291,6 +308,13 @@ int verify_file(VerifierInterface* package, const std::vector<Certificate>& keys
+         continue;
+       }
+ 
++      LOG(INFO) << "whole-file signature verified against EC key " << i;
++      return VERIFY_SUCCESS;
++    } else if (key.key_type == Certificate::KEY_TYPE_EC && key.hash_len == SHA512_DIGEST_LENGTH) {
++      if (!ECDSA_verify(0, hash, key.hash_len, sig_der.data(), sig_der.size(), key.ec.get())) {
++        LOG(INFO) << "failed to verify against EC key " << i;
++        continue;
++      }
+       LOG(INFO) << "whole-file signature verified against EC key " << i;
+       return VERIFY_SUCCESS;
+     } else {
+@@ -305,6 +329,9 @@ int verify_file(VerifierInterface* package, const std::vector<Certificate>& keys
+   if (need_sha256) {
+     LOG(INFO) << "SHA-256 digest: " << print_hex(sha256, SHA256_DIGEST_LENGTH);
+   }
++  if (need_sha512) {
++    LOG(INFO) << "SHA-512 digest: " << print_hex(sha512, SHA512_DIGEST_LENGTH);
++  }
+   LOG(ERROR) << "failed to verify whole-file signature";
+   return VERIFY_FAILURE;
+ }
+@@ -372,8 +399,8 @@ bool CheckRSAKey(const std::unique_ptr<RSA, RSADeleter>& rsa) {
+   const BIGNUM* out_e;
+   RSA_get0_key(rsa.get(), &out_n, &out_e, nullptr /* private exponent */);
+   auto modulus_bits = BN_num_bits(out_n);
+-  if (modulus_bits != 2048 && modulus_bits != 4096) {
+-    LOG(ERROR) << "Modulus should be 2048 or 4096 bits long, actual: " << modulus_bits;
++  if (modulus_bits != 2048 && modulus_bits != 4096 && modulus_bits != 8192) {
++    LOG(ERROR) << "Modulus should be 2048, 4096 or 8192 bits long, actual: " << modulus_bits;
+     return false;
+   }
+ 
+@@ -397,8 +424,8 @@ bool CheckECKey(const std::unique_ptr<EC_KEY, ECKEYDeleter>& ec_key) {
+     return false;
+   }
+   auto degree = EC_GROUP_get_degree(ec_group);
+-  if (degree != 256) {
+-    LOG(ERROR) << "Field size of the ec key should be 256 bits long, actual: " << degree;
++  if (degree != 256 && degree != 512) {
++    LOG(ERROR) << "Field size of the ec key should be 256 or 512 bits long, actual: " << degree;
+     return false;
+   }
+ 
+@@ -426,6 +453,9 @@ bool LoadCertificateFromBuffer(const std::vector<uint8_t>& pem_content, Certific
+     case NID_sha1WithRSAEncryption:
+       cert->hash_len = SHA_DIGEST_LENGTH;
+       break;
++    case NID_sha512WithRSAEncryption:
++      cert->hash_len = SHA512_DIGEST_LENGTH;
++      break;
+     case NID_sha256WithRSAEncryption:
+     case NID_ecdsa_with_SHA256:
+       cert->hash_len = SHA256_DIGEST_LENGTH;
+diff --git a/recovery_ui/screen_ui.cpp b/recovery_ui/screen_ui.cpp
+index abd87b98..2f2014b5 100644
+--- a/recovery_ui/screen_ui.cpp
++++ b/recovery_ui/screen_ui.cpp
+@@ -563,15 +563,15 @@ void ScreenRecoveryUI::SetColor(UIElement e) const {
+   switch (e) {
+     case UIElement::INFO:
+       if (fastbootd_logo_enabled_)
+-        gr_color(0xfd, 0xd8, 0x35, 255);
++        gr_color(0x8b, 0xc3, 0x4a, 255);
+       else
+-        gr_color(0xf8, 0x90, 0xff, 255);
++        gr_color(0xff, 0x98, 0x00, 255);
+       break;
+     case UIElement::HEADER:
+       if (fastbootd_logo_enabled_)
+-        gr_color(0xfd, 0xd8,0x35, 255);
++        gr_color(0x8b, 0xc3, 0x4a, 255);
+       else
+-        gr_color(0xf8, 0x90, 0xff, 255);
++        gr_color(0xff, 0x98, 0x00, 255);
+       break;
+     case UIElement::MENU:
+       gr_color(0xd8, 0xd8, 0xd8, 255);
+@@ -579,9 +579,9 @@ void ScreenRecoveryUI::SetColor(UIElement e) const {
+     case UIElement::MENU_SEL_BG:
+     case UIElement::SCROLLBAR:
+       if (fastbootd_logo_enabled_)
+-        gr_color(0xe6, 0x51, 0x00, 255);
++        gr_color(0x4c, 0xaf, 0x50, 255);
+       else
+-        gr_color(0x7c, 0x4d, 0xff, 255);
++        gr_color(0xff, 0x57, 0x22, 255);
+       break;
+     case UIElement::MENU_SEL_BG_ACTIVE:
+       gr_color(0, 156, 100, 255);
+@@ -807,7 +807,6 @@ void ScreenRecoveryUI::draw_menu_and_text_buffer_locked(
+     auto logo_width = gr_get_width(logo.get());
+     auto logo_height = gr_get_height(logo.get());
+     auto centered_x = ScreenWidth() / 2 - logo_width / 2;
+-    DrawSurface(logo.get(), 0, 0, logo_width, logo_height, centered_x, y);
+     y += logo_height;
+ 
+     if (!menu_->IsMain()) {
+diff --git a/res-hdpi/images/ic_back_sel.png b/res-hdpi/images/ic_back_sel.png
+index 13fcaea1..fb549b28 100644
+Binary files a/res-hdpi/images/ic_back_sel.png and b/res-hdpi/images/ic_back_sel.png differ
+diff --git a/res-mdpi/images/ic_back_sel.png b/res-mdpi/images/ic_back_sel.png
+index b9a013b0..23f01612 100644
+Binary files a/res-mdpi/images/ic_back_sel.png and b/res-mdpi/images/ic_back_sel.png differ
+diff --git a/res-xhdpi/images/ic_back_sel.png b/res-xhdpi/images/ic_back_sel.png
+index f69573dd..e1cd6d88 100644
+Binary files a/res-xhdpi/images/ic_back_sel.png and b/res-xhdpi/images/ic_back_sel.png differ
+diff --git a/res-xxhdpi/images/ic_back_sel.png b/res-xxhdpi/images/ic_back_sel.png
+index 4657b57d..9e5c976e 100644
+Binary files a/res-xxhdpi/images/ic_back_sel.png and b/res-xxhdpi/images/ic_back_sel.png differ
+diff --git a/res-xxxhdpi/images/ic_back_sel.png b/res-xxxhdpi/images/ic_back_sel.png
+index efe1b02e..94be59ca 100644
+Binary files a/res-xxxhdpi/images/ic_back_sel.png and b/res-xxxhdpi/images/ic_back_sel.png differ
